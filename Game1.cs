@@ -18,8 +18,8 @@ namespace NEAProjectLcokedIn
         private List<Vector2> velocities;
         private List<float> weights;
         private float accelerationY = 1000f;
-        private const float RectangleWidth = 50f;
-        private const float RectangleHeight = 50f;
+        private const float RectangleWidth = 10f;
+        private const float RectangleHeight = 10f;
         private Rectangle addButtonRect;
         private Rectangle deleteButtonRect;
         private MouseState previousMouseState;
@@ -31,6 +31,7 @@ namespace NEAProjectLcokedIn
         private const float DragCoefficient = 0.5f;
         private string weightInput = "";
         private bool isEnteringWeight = false;
+        private const float CollisionElasticity = 0.8f;
 
         public Game1()
         {
@@ -97,11 +98,58 @@ namespace NEAProjectLcokedIn
             isEnteringWeight = false;
         }
 
+private void DrawObjectCount(SpriteBatch spriteBatch)
+{
+    string countText = $"Objects: {positions.Count}";
+    Vector2 textSize = font.MeasureString(countText);
+    Vector2 textPosition = new Vector2(
+        graphics.PreferredBackBufferWidth / 2, // Center horizontally
+        graphics.PreferredBackBufferHeight); // 30 pixels from the bottom
+
+    spriteBatch.DrawString(font, countText, textPosition, Color.Black, 0f, new Vector2(textSize.X / 2, textSize.Y), 1f, SpriteEffects.None, 0f);
+}
+
+
+
+
         private bool CheckCollision(Vector2 pos1, Vector2 pos2)
         {
             Rectangle rect1 = new Rectangle((int)pos1.X, (int)pos1.Y, (int)RectangleWidth, (int)RectangleHeight);
             Rectangle rect2 = new Rectangle((int)pos2.X, (int)pos2.Y, (int)RectangleWidth, (int)RectangleHeight);
             return rect1.Intersects(rect2);
+        }
+
+        private void ResolveCollision(int index1, int index2)
+        {
+            Vector2 position1 = positions[index1];
+            Vector2 position2 = positions[index2];
+            Vector2 velocity1 = velocities[index1];
+            Vector2 velocity2 = velocities[index2];
+            float mass1 = weights[index1];
+            float mass2 = weights[index2];
+
+            Vector2 normal = Vector2.Normalize(position2 - position1);
+            Vector2 relativeVelocity = velocity2 - velocity1;
+
+            float velocityAlongNormal = Vector2.Dot(relativeVelocity, normal);
+
+            if (velocityAlongNormal > 0)
+                return;
+
+            float restitution = CollisionElasticity;
+            float impulseMagnitude = -(1 + restitution) * velocityAlongNormal;
+            impulseMagnitude /= 1 / mass1 + 1 / mass2;
+
+            Vector2 impulse = impulseMagnitude * normal;
+
+            velocities[index1] -= impulse / mass1;
+            velocities[index2] += impulse / mass2;
+
+            // Separate the objects
+            float overlap = RectangleWidth - Vector2.Distance(position1, position2);
+            Vector2 separation = overlap * 0.5f * normal;
+            positions[index1] -= separation;
+            positions[index2] += separation;
         }
 
         protected override void Update(GameTime gameTime)
@@ -196,7 +244,7 @@ namespace NEAProjectLcokedIn
                 }
             }
 
-            // Handle mouse dragging for selected object
+            // Handle mouse dragging for selected object -- GLITCHY RN FIX LATER
             if (selectedObjectIndex.HasValue && currentMouseState.LeftButton == ButtonState.Pressed)
             {
                 Vector2 mousePosition = new Vector2(currentMouseState.X, currentMouseState.Y);
@@ -221,52 +269,37 @@ namespace NEAProjectLcokedIn
                 velocity.Y += accelerationY * deltaTime;
 
                 // Update position
-                position += velocity * deltaTime;
+                Vector2 newPosition = position + velocity * deltaTime;
 
                 // Bounce off edges
-                if (position.Y + RectangleHeight > graphics.PreferredBackBufferHeight || position.Y < 0)
+                if (newPosition.Y + RectangleHeight > graphics.PreferredBackBufferHeight || newPosition.Y < 0)
                 {
-                    velocity.Y = -velocity.Y * 0.9f;
-                    position.Y = (position.Y + RectangleHeight > graphics.PreferredBackBufferHeight) ?
+                    velocity.Y = -velocity.Y * CollisionElasticity;
+                    newPosition.Y = (newPosition.Y + RectangleHeight > graphics.PreferredBackBufferHeight) ?
                         graphics.PreferredBackBufferHeight - RectangleHeight : 0;
                 }
 
-                if (position.X + RectangleWidth > graphics.PreferredBackBufferWidth || position.X < 0)
+                if (newPosition.X + RectangleWidth > graphics.PreferredBackBufferWidth || newPosition.X < 0)
                 {
-                    velocity.X = -velocity.X * 0.9f;
-                    position.X = (position.X + RectangleWidth > graphics.PreferredBackBufferWidth) ?
+                    velocity.X = -velocity.X * CollisionElasticity;
+                    newPosition.X = (newPosition.X + RectangleWidth > graphics.PreferredBackBufferWidth) ?
                         graphics.PreferredBackBufferWidth - RectangleWidth : 0;
                 }
 
-                // Check for collisions with other objects
+                positions[i] = newPosition;
+                velocities[i] = velocity;
+            }
+
+            // Check for collisions
+            for (int i = 0; i < positions.Count; i++)
+            {
                 for (int j = i + 1; j < positions.Count; j++)
                 {
-                    if (CheckCollision(position, positions[j]))
+                    if (CheckCollision(positions[i], positions[j]))
                     {
-                        // Simple collision response
-                        Vector2 collisionNormal = Vector2.Normalize(positions[j] - position);
-                        float relativeVelocity = Vector2.Dot(velocity - velocities[j], collisionNormal);
-
-                        if (relativeVelocity < 0)
-                        {
-                            float impulse = -(1 + 0.8f) * relativeVelocity / (1 / weight + 1 / weights[j]);
-                            Vector2 impulseVector = impulse * collisionNormal;
-
-                            velocity += impulseVector / weight;
-                            velocities[j] -= impulseVector / weights[j];
-
-                            // Separate the objects to prevent sticking
-                            float overlap = RectangleWidth - Vector2.Distance(position, positions[j]);
-                            Vector2 separationVector = overlap * 0.5f * collisionNormal;
-                            position -= separationVector;
-                            positions[j] += separationVector;
-                        }
+                        ResolveCollision(i, j);
                     }
                 }
-
-                // Update object state
-                positions[i] = position;
-                velocities[i] = velocity;
             }
 
             previousMouseState = currentMouseState;
@@ -276,42 +309,46 @@ namespace NEAProjectLcokedIn
         }
 
         protected override void Draw(GameTime gameTime)
+{
+    GraphicsDevice.Clear(Color.CornflowerBlue);
+
+    spriteBatch.Begin();
+    for (int i = 0; i < positions.Count; i++)
+    {
+        Vector2 position = positions[i];
+        if (i == selectedObjectIndex)
         {
-            GraphicsDevice.Clear(Color.CornflowerBlue);
-
-            spriteBatch.Begin();
-            for (int i = 0; i < positions.Count; i++)
-            {
-                Vector2 position = positions[i];
-                if (i == selectedObjectIndex)
-                {
-                    // Draw black outline for selected object
-                    spriteBatch.Draw(outlineTexture, new Rectangle((int)position.X - 5, (int)position.Y - 5, (int)RectangleWidth + 10, (int)RectangleHeight + 10), Color.Black);
-                }
-                spriteBatch.Draw(rectangleTexture, new Rectangle((int)position.X, (int)position.Y, (int)RectangleWidth, (int)RectangleHeight), Color.Red);
-            }
-            spriteBatch.Draw(addButtonTexture, addButtonRect, Color.White);
-            spriteBatch.Draw(deleteButtonTexture, deleteButtonRect, Color.White);
-
-            // Draw velocity, acceleration, and weight text for selected object
-            if (selectedObjectIndex.HasValue)
-            {
-                Vector2 velocity = velocities[selectedObjectIndex.Value];
-                Vector2 acceleration = new Vector2(lastAppliedForce.X / (RectangleWidth * weights[selectedObjectIndex.Value]), lastAppliedForce.Y / (RectangleHeight * weights[selectedObjectIndex.Value]) + accelerationY);
-                string infoText = $"Velocity: {velocity.X:F2}, {velocity.Y:F2} | Acceleration: {acceleration.X:F2}, {acceleration.Y:F2}";
-                Vector2 textSize = font.MeasureString(infoText);
-                Vector2 textPosition = new Vector2(graphics.PreferredBackBufferWidth / 2f, 30f);
-                spriteBatch.DrawString(font, infoText, textPosition, Color.Black, 0f, textSize / 2f, 1f, SpriteEffects.None, 0f);
-
-                string weightText = isEnteringWeight ? $"Weight: {weightInput}_" : $"Weight: {weights[selectedObjectIndex.Value]:F2}";
-                Vector2 weightTextSize = font.MeasureString(weightText);
-                Vector2 weightTextPosition = new Vector2(graphics.PreferredBackBufferWidth / 2f, 60f);
-                spriteBatch.DrawString(font, weightText, weightTextPosition, Color.Black, 0f, weightTextSize / 2f, 1f, SpriteEffects.None, 0f);
-            }
-
-            spriteBatch.End();
-
-            base.Draw(gameTime);
+            // Draw black outline for selected object
+            spriteBatch.Draw(outlineTexture, new Rectangle((int)position.X - 5, (int)position.Y - 5, (int)RectangleWidth + 10, (int)RectangleHeight + 10), Color.Black);
         }
+        spriteBatch.Draw(rectangleTexture, new Rectangle((int)position.X, (int)position.Y, (int)RectangleWidth, (int)RectangleHeight), Color.Green);
+    }
+    spriteBatch.Draw(addButtonTexture, addButtonRect, Color.White);
+    spriteBatch.Draw(deleteButtonTexture, deleteButtonRect, Color.White);
+
+    // Draw the object count
+    DrawObjectCount(spriteBatch);
+
+    // Draw velocity, acceleration, and weight text for selected object
+    if (selectedObjectIndex.HasValue)
+    {
+        Vector2 velocity = velocities[selectedObjectIndex.Value];
+        Vector2 acceleration = new Vector2(lastAppliedForce.X / (RectangleWidth * weights[selectedObjectIndex.Value]), lastAppliedForce.Y / (RectangleHeight * weights[selectedObjectIndex.Value]) + accelerationY);
+        string infoText = $"Velocity: {velocity.X:F2}, {velocity.Y:F2} | Acceleration: {acceleration.X:F2}, {acceleration.Y:F2}";
+        Vector2 textSize = font.MeasureString(infoText);
+        Vector2 textPosition = new Vector2(graphics.PreferredBackBufferWidth / 2f, 30f);
+        spriteBatch.DrawString(font, infoText, textPosition, Color.Black, 0f, textSize / 2f, 1f, SpriteEffects.None, 0f);
+
+        string weightText = isEnteringWeight ? $"Weight: {weightInput}_" : $"Weight: {weights[selectedObjectIndex.Value]:F2}";
+        Vector2 weightTextSize = font.MeasureString(weightText);
+        Vector2 weightTextPosition = new Vector2(graphics.PreferredBackBufferWidth / 2f, 60f);
+        spriteBatch.DrawString(font, weightText, weightTextPosition, Color.Black, 0f, weightTextSize / 2f, 1f, SpriteEffects.None, 0f);
+    }
+
+    spriteBatch.End();
+
+    base.Draw(gameTime);
+}
+
     }
 }
